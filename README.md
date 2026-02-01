@@ -62,18 +62,6 @@ uv run streamlit run main.py
 
 The app will open at: http://localhost:8501
 
-### Java Excel Comparator (Optional)
-
-```bash
-# Build the tool
-mvn clean package
-
-# Run comparison
-java -jar target/excel-comparator-1.0.0-jar-with-dependencies.jar file1.xlsx file2.xlsx
-```
-
-See [EXCEL_COMPARATOR_README.md](EXCEL_COMPARATOR_README.md) for details.
-
 ## 🧩 How to Use
 
 ### Quick Start
@@ -186,3 +174,4 @@ This is a proof-of-concept project. Use at your own discretion.
 
 **Built with**: Python, Streamlit, Ollama, Apache POI  
 **Optimized for**: Speed, Cost Efficiency, Transparency
+
