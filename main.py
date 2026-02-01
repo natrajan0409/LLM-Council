@@ -175,6 +175,13 @@ with st.sidebar:
 
     st.header("2. Council Configuration")
     
+    # Council Mode Selection
+    council_mode = st.radio(
+        "Council Mode:",
+        ("Classic Council", "Debate Council"),
+        help="Classic: Multiple members deliberate. Debate: Proponent vs Opponent with short-circuit."
+    )
+    
     # Fetch available models from the ACTIVE provider
     available_models = st.session_state.provider_instance.list_models()
     
@@ -187,17 +194,48 @@ with st.sidebar:
 
     default_index = 0
     
-    st.subheader("Chairman")
-    chairman_model = st.selectbox("Select Chairman Model", available_models, index=default_index, key="chairman")
+    if council_mode == "Classic Council":
+        st.subheader("Chairman")
+        chairman_model = st.selectbox("Select Chairman Model", available_models, index=default_index, key="chairman")
 
-    st.subheader("Council Members")
-    num_members = st.slider("Number of Council Members", min_value=2, max_value=3, value=2)
-    
-    council_members_models = []
-    for i in range(num_members):
-        member_index = (i + 1) % len(available_models)
-        model = st.selectbox(f"Council Member {i+1}", available_models, index=member_index, key=f"member_{i}")
-        council_members_models.append(model)
+        st.subheader("Council Members")
+        num_members = st.slider("Number of Council Members", min_value=2, max_value=3, value=2)
+        
+        council_members_models = []
+        for i in range(num_members):
+            member_index = (i + 1) % len(available_models)
+            model = st.selectbox(f"Council Member {i+1}", available_models, index=member_index, key=f"member_{i}")
+            council_members_models.append(model)
+    else:  # Debate Council
+        st.subheader("Debate Council Roles")
+        
+        proponent_index = 0
+        opponent_index = min(1, len(available_models) - 1)
+        chairman_index = min(2, len(available_models) - 1)
+        
+        proponent_model = st.selectbox(
+            "Proponent (Initial Draft)", 
+            available_models, 
+            index=proponent_index, 
+            key="proponent",
+            help="Best general-purpose model (e.g., Claude 3.5 Sonnet, GPT-4o)"
+        )
+        
+        opponent_model = st.selectbox(
+            "Opponent (Logic Auditor)", 
+            available_models, 
+            index=opponent_index, 
+            key="opponent",
+            help="Different model for adversarial review"
+        )
+        
+        chairman_model = st.selectbox(
+            "Chairman (Final Arbiter)", 
+            available_models, 
+            index=chairman_index, 
+            key="debate_chairman",
+            help="Only called if Opponent finds flaws"
+        )
 
 # Initialize Chat History
 if "messages" not in st.session_state:
@@ -207,12 +245,34 @@ if "messages" not in st.session_state:
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
+        
+        # Classic Council - Show deliberation
         if "details" in msg:
              with st.expander("View Council Deliberation"):
                 for detail in msg["details"]:
                     st.markdown(f"**{detail['role']} ({detail['model']})**")
                     st.markdown(f"_{detail['content']}_")
                     st.divider()
+        
+        # Debate Council - Show chain of thought
+        if "debate_trace" in msg:
+            with st.expander("🔍 View Chain of Thought (Debate Trace)"):
+                for step in msg["debate_trace"]:
+                    if step['step'] == 'Proponent':
+                        st.markdown(f"**📝 Step 1: Proponent ({step['model']})**")
+                        st.markdown(f"_{step['output']}_")
+                    elif step['step'] == 'Opponent (Logic Auditor)':
+                        st.markdown(f"**🔍 Step 2: Opponent - Logic Audit ({step['model']})**")
+                        st.markdown(f"_{step['output']}_")
+                    elif step['step'] == 'Short-Circuit':
+                        st.success(f"⚡ **Step 3: {step['message']}**")
+                    elif step['step'] == 'Chairman':
+                        st.markdown(f"**👨‍⚖️ Step 4: Chairman ({step['model']})**")
+                        st.markdown(f"_{step['output']}_")
+                    st.divider()
+                
+                if msg.get("short_circuit", False):
+                    st.info("💡 **Cost Savings**: Short-circuit activated! Only 2 API calls instead of 3 (33% savings).")
 
 # Input Area
 if prompt := st.chat_input("Ask the Council..."):
@@ -234,40 +294,83 @@ if prompt := st.chat_input("Ask the Council..."):
         message_placeholder = st.empty()
         status_text = st.status(f"The Council ({provider_option}) is deliberating...", expanded=True)
         
-        council_opinions = []
-        
         # We use the active provider instance for all members
         current_provider = st.session_state.provider_instance
+        
+        if council_mode == "Classic Council":
+            council_opinions = []
+            
+            # 1. Council Members generate opinions
+            for i, model_name in enumerate(council_members_models):
+                role_name = f"Council Member {i+1}"
+                status_text.write(f"🤔 {role_name} ({model_name}) is thinking...")
+                
+                # Pass the provider instance to the Member class
+                member = council.CouncilMember(current_provider, model_name, role=role_name)
+                opinion = member.get_opinion(prompt, chat_history=chat_history_for_models)
+                
+                council_opinions.append({
+                    "role": role_name,
+                    "model": model_name,
+                    "content": opinion
+                })
+                status_text.write(f"✅ {role_name} has spoken.")
 
-        # 1. Council Members generate opinions
-        for i, model_name in enumerate(council_members_models):
-            role_name = f"Council Member {i+1}"
-            status_text.write(f"🤔 {role_name} ({model_name}) is thinking...")
+            # 2. Chairman synthesis
+            status_text.write(f"👨‍⚖️ The Chairman ({chairman_model}) is synthesizing the final response...")
+            # Pass the provider instance to the Chairman class
+            chairman = council.Chairman(current_provider, chairman_model)
+            final_response = chairman.synthesize(prompt, council_opinions, chat_history=chat_history_for_models)
             
-            # Pass the provider instance to the Member class
-            member = council.CouncilMember(current_provider, model_name, role=role_name)
-            opinion = member.get_opinion(prompt, chat_history=chat_history_for_models)
+            status_text.update(label="Deliberation Complete", state="complete", expanded=False)
             
-            council_opinions.append({
-                "role": role_name,
-                "model": model_name,
-                "content": opinion
+            message_placeholder.markdown(final_response)
+            
+            # Save validation/response
+            st.session_state.messages.append({
+                "role": "assistant", 
+                "content": final_response,
+                "details": council_opinions
             })
-            status_text.write(f"✅ {role_name} has spoken.")
-
-        # 2. Chairman synthesis
-        status_text.write(f"👨‍⚖️ The Chairman ({chairman_model}) is synthesizing the final response...")
-        # Pass the provider instance to the Chairman class
-        chairman = council.Chairman(current_provider, chairman_model)
-        final_response = chairman.synthesize(prompt, council_opinions, chat_history=chat_history_for_models)
         
-        status_text.update(label="Deliberation Complete", state="complete", expanded=False)
-        
-        message_placeholder.markdown(final_response)
-        
-        # Save validation/response
-        st.session_state.messages.append({
-            "role": "assistant", 
-            "content": final_response,
-            "details": council_opinions
-        })
+        else:  # Debate Council
+            # 1. Create debate council
+            status_text.write(f"📝 Proponent ({proponent_model}) is drafting initial response...")
+            proponent = council.Proponent(current_provider, proponent_model)
+            
+            status_text.write(f"🔍 Opponent ({opponent_model}) will audit the response...")
+            opponent = council.Opponent(current_provider, opponent_model)
+            
+            debate_chairman = council.DebateChairman(current_provider, chairman_model)
+            
+            debate_council = council.DebateCouncil(proponent, opponent, debate_chairman)
+            
+            # 2. Execute debate
+            result = debate_council.deliberate(prompt, chat_history=chat_history_for_models)
+            
+            # 3. Display trace
+            for step in result['trace']:
+                if step['step'] == 'Proponent':
+                    status_text.write(f"✅ Proponent ({step['model']}) completed draft")
+                elif step['step'] == 'Opponent (Logic Auditor)':
+                    status_text.write(f"✅ Opponent ({step['model']}) completed audit")
+                elif step['step'] == 'Short-Circuit':
+                    status_text.write(f"⚡ {step['message']}")
+                elif step['step'] == 'Chairman':
+                    status_text.write(f"✅ Chairman ({step['model']}) synthesized final response")
+            
+            if result['short_circuit']:
+                status_text.update(label="✓ Debate Complete (Short-Circuit Activated - Saved 33%!)", state="complete", expanded=False)
+            else:
+                status_text.update(label="Debate Complete", state="complete", expanded=False)
+            
+            final_response = result['final_response']
+            message_placeholder.markdown(final_response)
+            
+            # Save with trace for transparency
+            st.session_state.messages.append({
+                "role": "assistant", 
+                "content": final_response,
+                "debate_trace": result['trace'],
+                "short_circuit": result['short_circuit']
+            })

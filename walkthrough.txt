@@ -1,0 +1,305 @@
+================================================================================
+                    LLM COUNCIL - DEBATE MODE WALKTHROUGH
+                         Feature Implementation Guide
+================================================================================
+
+OVERVIEW
+--------
+This walkthrough documents the Debate-Style LLM Council feature, which 
+implements a Proponent → Opponent → Chairman architecture with intelligent 
+short-circuit logic that saves 33% on API costs.
+
+
+================================================================================
+FEATURE: DEBATE COUNCIL MODE
+================================================================================
+
+WHAT IS IT?
+-----------
+A new council mode where:
+1. PROPONENT generates an initial comprehensive response
+2. OPPONENT (Logic Auditor) critiques the response for flaws
+3. SHORT-CIRCUIT: If no flaws found, skip to final answer (saves 33% cost!)
+4. CHAIRMAN synthesizes final response (only if flaws were found)
+
+
+HOW TO USE
+----------
+1. Launch the app: 
+   > uv run streamlit run main.py
+   
+2. In the sidebar:
+   - Select your AI Provider (Ollama, Claude Code, OpenCode, Antigravity)
+   - Click "Connect & Fetch Models"
+   
+3. Choose "Debate Council" mode (new radio button)
+
+4. Select models for each role:
+   - Proponent: Your best general-purpose model (e.g., Claude 3.5 Sonnet)
+   - Opponent: Different model for adversarial review (e.g., GPT-4o)
+   - Chairman: Final arbiter (only called if needed)
+
+5. Ask your question and watch the debate unfold!
+
+
+DEBATE FLOW DIAGRAM
+-------------------
+
+                            ┌─────────────────┐
+                            │   USER QUERY    │
+                            └────────┬────────┘
+                                     │
+                                     ▼
+                        ┌────────────────────────┐
+                        │   STEP 1: PROPONENT    │
+                        │  Generate Initial Draft │
+                        └────────────┬───────────┘
+                                     │
+                                     ▼
+                        ┌────────────────────────┐
+                        │   STEP 2: OPPONENT     │
+                        │  (Senior Logic Auditor) │
+                        │   Critique the Draft    │
+                        └────────────┬───────────┘
+                                     │
+                                     ▼
+                        ┌────────────────────────┐
+                        │  STEP 3: VALIDATION    │
+                        │   Check for Phrases:   │
+                        │ "No critical flaws"    │
+                        │ "Response is accurate" │
+                        └────────────┬───────────┘
+                                     │
+                    ┌────────────────┴────────────────┐
+                    │                                 │
+                    ▼                                 ▼
+        ┌───────────────────────┐       ┌───────────────────────┐
+        │   FLAWS FOUND? NO     │       │   FLAWS FOUND? YES    │
+        │   ⚡ SHORT-CIRCUIT!    │       │   Continue Debate     │
+        └───────────┬───────────┘       └───────────┬───────────┘
+                    │                               │
+                    │                               ▼
+                    │                   ┌───────────────────────┐
+                    │                   │  STEP 4: CHAIRMAN     │
+                    │                   │  Synthesize Final     │
+                    │                   │  Response with Fixes  │
+                    │                   └───────────┬───────────┘
+                    │                               │
+                    ▼                               ▼
+        ┌───────────────────────┐       ┌───────────────────────┐
+        │  RETURN PROPONENT'S   │       │  RETURN CHAIRMAN'S    │
+        │      RESPONSE         │       │      RESPONSE         │
+        │                       │       │                       │
+        │  💰 Cost: 2 API calls │       │  💰 Cost: 3 API calls │
+        │  ✅ Saved 33%!        │       │  🔍 Full deliberation │
+        └───────────────────────┘       └───────────────────────┘
+
+
+LEGEND:
+-------
+⚡ = Short-circuit activated (cost savings!)
+💰 = API call cost
+✅ = Success/Validation
+🔍 = Full review needed
+
+
+EXAMPLE SCENARIOS
+-----------------
+
+Scenario 1: SIMPLE FACTUAL QUERY (Short-Circuit Activated)
+-----------------------------------------------------------
+Query: "What is the capital of France?"
+
+Flow:
+  Step 1: Proponent → "The capital of France is Paris."
+  Step 2: Opponent → "No critical flaws found. The response is accurate."
+  Step 3: ⚡ SHORT-CIRCUIT ACTIVATED!
+  
+Result: Returns Proponent's answer immediately
+API Calls: 2 (saved 33% - no Chairman needed!)
+
+
+Scenario 2: COMPLEX QUERY (Full Debate)
+----------------------------------------
+Query: "Should I use microservices for a small startup?"
+
+Flow:
+  Step 1: Proponent → Provides general answer about microservices
+  Step 2: Opponent → "Missing considerations: team size, complexity 
+          overhead, deployment costs, debugging challenges..."
+  Step 3: No short-circuit (flaws found)
+  Step 4: Chairman → Synthesizes balanced response incorporating 
+          Opponent's valid points
+  
+Result: Returns Chairman's refined answer
+API Calls: 3 (full deliberation needed)
+
+
+================================================================================
+TECHNICAL IMPLEMENTATION
+================================================================================
+
+NEW CLASSES ADDED (council.py)
+-------------------------------
+
+1. Proponent
+   - Purpose: Generate initial comprehensive draft
+   - Method: generate_draft(prompt, chat_history)
+   - System Prompt: "You are a highly capable AI assistant..."
+
+2. Opponent  
+   - Purpose: Act as Senior Logic Auditor
+   - Method: critique(user_query, proponent_output, chat_history)
+   - System Prompt: "You are FORBIDDEN from being nice. Find flaws..."
+   - Key: Must say "No critical flaws found" if response is accurate
+
+3. DebateChairman
+   - Purpose: Synthesize final response with corrections
+   - Method: synthesize(user_query, proponent_output, critique_output)
+   - System Prompt: "Incorporate valid corrections, ignore nitpicks..."
+
+4. DebateCouncil
+   - Purpose: Orchestrate the entire debate flow
+   - Method: deliberate(user_query, chat_history)
+   - Returns: {final_response, trace, short_circuit}
+
+
+SHORT-CIRCUIT LOGIC
+-------------------
+The system checks if Opponent's critique contains any of these phrases:
+  - "no critical flaws found"
+  - "the response is accurate"
+  - "no significant issues"
+  - "no major flaws"
+  - "response is correct"
+
+If found → Skip Chairman, return Proponent's response (saves 33% cost!)
+
+
+UI ENHANCEMENTS (main.py)
+-------------------------
+
+1. Council Mode Selector
+   - Radio button: "Classic Council" vs "Debate Council"
+   
+2. Conditional Model Selection
+   - Classic: Shows Chairman + 2-3 Council Members
+   - Debate: Shows Proponent, Opponent, Chairman (with role descriptions)
+
+3. Real-Time Status Updates
+   - "📝 Proponent completed draft"
+   - "✅ Opponent completed audit"
+   - "⚡ Short-circuit activated! Saved 33%"
+   - "✅ Chairman synthesized final response"
+
+4. Transparency Trace
+   - Expandable "🔍 View Chain of Thought" section
+   - Shows complete debate flow step-by-step
+   - Displays cost savings when short-circuit triggers
+
+
+================================================================================
+BENEFITS
+================================================================================
+
+✓ COST EFFICIENCY
+  - 33% savings on simple/factual queries
+  - Intelligent short-circuit prevents unnecessary API calls
+  
+✓ QUALITY IMPROVEMENT
+  - Adversarial review catches logic gaps and errors
+  - Critical thinking enforced through Logic Auditor prompt
+  
+✓ TRANSPARENCY
+  - Complete chain of thought visible to users
+  - Shows exactly how council reached its decision
+  - Builds trust through visibility
+
+✓ FLEXIBILITY
+  - Both Classic and Debate modes available
+  - Works with all providers (Ollama, Claude, OpenAI, Gemini)
+  - Users choose based on their needs
+
+
+================================================================================
+FILES MODIFIED
+================================================================================
+
+council.py      (+149 lines)  - Added 4 new debate classes
+main.py         (+84 lines)   - Added UI and processing logic
+README.md       (+7 lines)    - Updated documentation
+
+
+================================================================================
+COMPARISON: CLASSIC vs DEBATE MODE
+================================================================================
+
+CLASSIC COUNCIL MODE
+--------------------
+- 2-3 models provide independent opinions
+- Chairman synthesizes all opinions
+- Always uses 3-4 API calls
+- Good for: Complex topics needing multiple perspectives
+
+DEBATE COUNCIL MODE (NEW!)
+---------------------------
+- Proponent drafts, Opponent critiques, Chairman refines
+- Short-circuit when initial response is good
+- Uses 2-3 API calls (saves 33% when possible)
+- Good for: General queries, factual questions, cost optimization
+
+
+================================================================================
+TESTING CHECKLIST
+================================================================================
+
+✓ Test short-circuit with factual query
+✓ Test full debate with complex query
+✓ Verify transparency trace displays correctly
+✓ Test with different AI providers
+✓ Confirm cost savings indicator shows
+✓ Check both council modes work independently
+
+
+================================================================================
+FUTURE ENHANCEMENTS (Optional)
+================================================================================
+
+- Metrics dashboard tracking short-circuit rate
+- Custom short-circuit phrase configuration
+- Multi-round debate (loop if Chairman's response still has flaws)
+- Export debate traces for analysis
+- Performance analytics and cost tracking
+
+
+================================================================================
+QUICK REFERENCE
+================================================================================
+
+Launch App:
+  > uv run streamlit run main.py
+
+Access:
+  Local:   http://localhost:8501
+  Network: http://192.168.29.200:8501
+
+Key Files:
+  council.py  - Core debate logic
+  main.py     - UI and integration
+  README.md   - User documentation
+
+
+================================================================================
+SUPPORT
+================================================================================
+
+For issues or questions:
+1. Check README.md for setup instructions
+2. Review OAUTH_SETUP.md for authentication help
+3. Review SERVICE_ACCOUNT_SETUP.md for service account setup
+4. Check the transparency trace for debugging
+
+
+================================================================================
+                              END OF WALKTHROUGH
+================================================================================

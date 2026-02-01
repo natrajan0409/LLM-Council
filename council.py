@@ -33,6 +33,15 @@ class LLMProvider(ABC):
 # --- Implementations ---
 
 class OllamaProvider(LLMProvider):
+    def __init__(self, optimize_speed: bool = True):
+        """
+        Initialize Ollama provider with optional speed optimizations.
+        
+        Args:
+            optimize_speed: If True, use settings optimized for faster responses
+        """
+        self.optimize_speed = optimize_speed
+    
     def list_models(self) -> List[str]:
         try:
             models_info = ollama.list()
@@ -50,8 +59,23 @@ class OllamaProvider(LLMProvider):
             messages.extend(history)
         messages.append({'role': 'user', 'content': prompt})
         
+        # Performance optimization options for local models
+        options = {}
+        if self.optimize_speed:
+            options = {
+                'num_ctx': 2048,        # Reduced context window for faster processing
+                'num_predict': 512,     # Limit response length for speed
+                'temperature': 0.7,     # Slightly lower for more focused responses
+                'top_p': 0.9,          # Nucleus sampling
+                'top_k': 40,           # Limit token selection
+            }
+        
         try:
-            response = ollama.chat(model=model, messages=messages)
+            response = ollama.chat(
+                model=model, 
+                messages=messages,
+                options=options
+            )
             return response['message']['content']
         except Exception as e:
             return f"Ollama Error: {e}"
@@ -207,6 +231,149 @@ class Chairman:
         final_prompt = f"User Query: {user_query}\n\nCouncil Opinions:\n{opinions_text}\n\nChairman, please provide your synthesized response:"
         
         return self.provider.generate_response(self.model_name, final_prompt, system_prompt, chat_history)
+
+# --- Debate-Style Council ---
+
+class Proponent:
+    """Generates the initial comprehensive response (Step 1)"""
+    def __init__(self, provider: LLMProvider, model_name: str):
+        self.provider = provider
+        self.model_name = model_name
+
+    def generate_draft(self, prompt: str, chat_history: List[Dict[str, str]] = None) -> str:
+        system_prompt = (
+            "You are a highly capable AI assistant. "
+            "Provide a comprehensive, accurate, and well-reasoned response to the user's query. "
+            "Be thorough and consider multiple perspectives."
+        )
+        return self.provider.generate_response(self.model_name, prompt, system_prompt, chat_history)
+
+
+class Opponent:
+    """Acts as Senior Logic Auditor to find flaws (Step 2)"""
+    def __init__(self, provider: LLMProvider, model_name: str):
+        self.provider = provider
+        self.model_name = model_name
+
+    def critique(self, user_query: str, proponent_output: str, chat_history: List[Dict[str, str]] = None) -> str:
+        system_prompt = (
+            "You are a Senior Logic Auditor. Your job is to find logic gaps, factual errors, "
+            "missing edge cases, or weak reasoning in the provided response. "
+            "You are FORBIDDEN from being nice. Be critical and thorough. "
+            "If the response is accurate and complete with no significant flaws, you MUST say 'No critical flaws found.' "
+            "Otherwise, provide specific, actionable critique pointing out exactly what is wrong or missing."
+        )
+        
+        critique_prompt = f"""Original User Query: {user_query}
+
+Response to Audit:
+{proponent_output}
+
+Please audit this response for accuracy, completeness, and logical soundness."""
+        
+        return self.provider.generate_response(self.model_name, critique_prompt, system_prompt, chat_history)
+
+
+class DebateChairman:
+    """Synthesizes final response incorporating valid critiques (Step 4)"""
+    def __init__(self, provider: LLMProvider, model_name: str):
+        self.provider = provider
+        self.model_name = model_name
+
+    def synthesize(self, user_query: str, proponent_output: str, critique_output: str, chat_history: List[Dict[str, str]] = None) -> str:
+        system_prompt = (
+            "You are the Chairman of an LLM Council. "
+            "Review the Draft response and the Feedback from the Logic Auditor. "
+            "Incorporate valid corrections and improvements while ignoring irrelevant nitpicks. "
+            "Output the final, battle-hardened answer that addresses the user's query accurately and completely."
+        )
+        
+        synthesis_prompt = f"""User Query: {user_query}
+
+Draft Response:
+{proponent_output}
+
+Logic Auditor Feedback:
+{critique_output}
+
+Chairman, please provide your final synthesized response:"""
+        
+        return self.provider.generate_response(self.model_name, synthesis_prompt, system_prompt, chat_history)
+
+
+class DebateCouncil:
+    """Orchestrates the Proponent → Opponent → Chairman debate flow with short-circuit logic"""
+    def __init__(self, proponent: Proponent, opponent: Opponent, chairman: DebateChairman):
+        self.proponent = proponent
+        self.opponent = opponent
+        self.chairman = chairman
+
+    def deliberate(self, user_query: str, chat_history: List[Dict[str, str]] = None) -> Dict[str, any]:
+        """
+        Execute the debate flow and return results with transparency trace.
+        
+        Returns:
+            Dict with keys:
+            - 'final_response': The final answer to return to user
+            - 'trace': List of steps taken (for transparency)
+            - 'short_circuit': Boolean indicating if short-circuit was triggered
+        """
+        trace = []
+        
+        # Step 1: Proponent generates initial draft
+        proponent_output = self.proponent.generate_draft(user_query, chat_history)
+        trace.append({
+            'step': 'Proponent',
+            'model': self.proponent.model_name,
+            'output': proponent_output
+        })
+        
+        # Step 2: Opponent critiques the draft
+        critique_output = self.opponent.critique(user_query, proponent_output, chat_history)
+        trace.append({
+            'step': 'Opponent (Logic Auditor)',
+            'model': self.opponent.model_name,
+            'output': critique_output
+        })
+        
+        # Step 3: Short-circuit check
+        short_circuit_phrases = [
+            "no critical flaws found",
+            "the response is accurate",
+            "no significant issues",
+            "no major flaws",
+            "response is correct"
+        ]
+        
+        critique_lower = critique_output.lower()
+        should_short_circuit = any(phrase in critique_lower for phrase in short_circuit_phrases)
+        
+        if should_short_circuit:
+            # Short-circuit: Return proponent's output immediately
+            trace.append({
+                'step': 'Short-Circuit',
+                'message': '✓ Opponent validated the response. Skipping Chairman to save cost/latency.'
+            })
+            return {
+                'final_response': proponent_output,
+                'trace': trace,
+                'short_circuit': True
+            }
+        
+        # Step 4: Chairman synthesizes final response
+        final_response = self.chairman.synthesize(user_query, proponent_output, critique_output, chat_history)
+        trace.append({
+            'step': 'Chairman',
+            'model': self.chairman.model_name,
+            'output': final_response
+        })
+        
+        return {
+            'final_response': final_response,
+            'trace': trace,
+            'short_circuit': False
+        }
+
 
 def get_provider_implementation(provider_name: str, api_key: str = None, oauth_credentials=None) -> Optional[LLMProvider]:
     if provider_name == "Ollama":

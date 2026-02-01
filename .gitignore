@@ -8,3 +8,18 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Debug and temporary files
+debug_*.py
+temp_*.json
+*.log
+
+# OAuth credentials (keep templates only)
+oauth_config.json
+!oauth_config.json.template
+
+# Java build artifacts
+target/
+*.class
+*.jar
+!*-with-dependencies.jar
