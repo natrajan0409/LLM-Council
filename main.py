@@ -41,20 +41,123 @@ with st.sidebar:
         help="Ollama is offline. Others require API Keys."
     )
     
+    
     api_key = None
+    oauth_creds = None
+    
     if provider_option != "Ollama":
-        api_key = st.text_input(f"Enter {provider_option} API Key:", type="password")
-        if not api_key:
-            st.warning("Please enter an API Key to proceed.")
-            st.stop()
+        if provider_option == "Antigravity":
+            # Special handling for Antigravity - offer both options
+            auth_method = st.radio(
+                "Authentication Method:",
+                ("API Key", "Login with Google"),
+                help="Choose how to authenticate"
+            )
+            
+            if auth_method == "API Key":
+                api_key = st.text_input(f"Enter {provider_option} API Key:", type="password")
+                if not api_key:
+                    st.warning("Please enter an API Key to proceed.")
+                    st.stop()
+            else:
+                # Multiple auth options for Antigravity
+                st.info("🔐 Authentication for Antigravity")
+                
+                auth_method = st.radio(
+                    "Choose authentication method:",
+                    ("API Key", "Service Account JSON", "OAuth (Browser Login)"),
+                    help="API Key is simplest. Service Account is for automation."
+                )
+                
+                if auth_method == "API Key":
+                    st.markdown("Get your key from [Google AI Studio](https://aistudio.google.com/app/apikey)")
+                    api_key = st.text_input("Enter Gemini API Key:", type="password")
+                    if not api_key:
+                        st.warning("Please enter an API Key to proceed.")
+                        st.stop()
+                        
+                elif auth_method == "Service Account JSON":
+                    st.markdown("**Using Service Account (No consent screen needed):**")
+                    st.markdown("1. Go to [Google Cloud Console](https://console.cloud.google.com/iam-admin/serviceaccounts)")
+                    st.markdown("2. Create a Service Account")
+                    st.markdown("3. Download the JSON key file")
+                    st.markdown("4. Upload it below")
+                    
+                    uploaded_file = st.file_uploader("Upload Service Account JSON", type=['json'])
+                    
+                    if uploaded_file:
+                        try:
+                            import json
+                            from google.oauth2 import service_account
+                            
+                            # Load service account credentials
+                            service_account_info = json.load(uploaded_file)
+                            credentials = service_account.Credentials.from_service_account_info(
+                                service_account_info,
+                                scopes=['https://www.googleapis.com/auth/generative-language']
+                            )
+                            
+                            st.session_state.oauth_creds = credentials
+                            oauth_creds = credentials
+                            st.success("✅ Service Account authenticated!")
+                            
+                        except Exception as e:
+                            st.error(f"❌ Failed to load Service Account: {e}")
+                            st.stop()
+                    else:
+                        st.warning("Please upload your Service Account JSON file.")
+                        st.stop()
+                    
+                else:  # OAuth Browser Login
+                    st.markdown("Download OAuth credentials from [Google Cloud Console](https://console.cloud.google.com/apis/credentials)")
+                    uploaded_file = st.file_uploader("Upload OAuth Client JSON", type=['json'])
+                    
+                    if uploaded_file and st.button("🔑 Login with Google"):
+                        try:
+                            import json
+                            from google_auth_oauthlib.flow import InstalledAppFlow
+                            
+                            oauth_config = json.load(uploaded_file)
+                            with open("temp_oauth.json", "w") as f:
+                                json.dump(oauth_config, f)
+                            
+                            flow = InstalledAppFlow.from_client_secrets_file(
+                                'temp_oauth.json',
+                                scopes=['https://www.googleapis.com/auth/generative-language']
+                            )
+                            
+                            # Use port 0 to automatically find an available port
+                            credentials = flow.run_local_server(port=0)
+                            
+                            st.session_state.oauth_creds = credentials
+                            oauth_creds = credentials
+                            st.success("✅ OAuth authenticated!")
+                            
+                            import os
+                            os.remove("temp_oauth.json")
+                            
+                        except Exception as e:
+                            st.error(f"❌ OAuth failed: {e}")
+                            st.stop()
+                    
+                    if "oauth_creds" not in st.session_state:
+                        st.warning("Please upload OAuth JSON and click 'Login with Google'.")
+                        st.stop()
+                    else:
+                        oauth_creds = st.session_state.oauth_creds
+        else:
+            # Other providers - API Key only
+            api_key = st.text_input(f"Enter {provider_option} API Key:", type="password")
+            if not api_key:
+                st.warning("Please enter an API Key to proceed.")
+                st.stop()
     
     # Initialize Provider
     if st.button("Connect & Fetch Models"):
         with st.spinner(f"Connecting to {provider_option}..."):
-            provider = council.get_provider_implementation(provider_option, api_key)
+            provider = council.get_provider_implementation(provider_option, api_key, oauth_creds)
             if provider:
                 st.session_state.provider_instance = provider
-                # Fetch models immediately to cache them? or just rely on dynamic list below
                 st.success("Connected!")
             else:
                 st.error("Failed to connect. Check implementation.")

@@ -115,8 +115,13 @@ class AnthropicProvider(LLMProvider):
             return f"Anthropic Error: {e}"
 
 class GoogleProvider(LLMProvider):
-    def __init__(self, api_key: str):
-        genai.configure(api_key=api_key)
+    def __init__(self, api_key: str = None, credentials=None):
+        if api_key:
+            genai.configure(api_key=api_key)
+        elif credentials:
+            genai.configure(credentials=credentials)
+        else:
+            raise ValueError("Either api_key or credentials must be provided")
 
     def list_models(self) -> List[str]:
         try:
@@ -203,15 +208,18 @@ class Chairman:
         
         return self.provider.generate_response(self.model_name, final_prompt, system_prompt, chat_history)
 
-def get_provider_implementation(provider_name: str, api_key: str = None) -> Optional[LLMProvider]:
+def get_provider_implementation(provider_name: str, api_key: str = None, oauth_credentials=None) -> Optional[LLMProvider]:
     if provider_name == "Ollama":
         return OllamaProvider()
     elif provider_name == "OpenCode" and api_key:
         return OpenAIProvider(api_key)
     elif provider_name == "Claude Code" and api_key:
         return AnthropicProvider(api_key)
-    elif provider_name == "Antigravity" and api_key:
-        return GoogleProvider(api_key)
+    elif provider_name == "Antigravity":
+        if api_key:
+            return GoogleProvider(api_key=api_key)
+        elif oauth_credentials:
+            return GoogleProvider(credentials=oauth_credentials)
     elif provider_name == "OpenRouter" and api_key:
         return OpenRouterProvider(api_key)
     return None
